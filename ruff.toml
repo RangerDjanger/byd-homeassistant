@@ -1,0 +1,13 @@
+# Ruff configuration for the BYD Home Assistant integration.
+target-version = "py312"
+line-length = 100
+
+extend-exclude = ["custom_components/byd/_vendor"]
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[lint.isort]
+force-sort-within-sections = true
+known-first-party = ["custom_components.byd"]

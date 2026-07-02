@@ -1,0 +1,128 @@
+set_seat_climate:
+  name: Set seat climate
+  description: Set the heating or ventilation level for a seat.
+  fields:
+    device_id:
+      name: Vehicle
+      description: The BYD vehicle to target.
+      required: true
+      selector:
+        device:
+          integration: byd
+    position:
+      name: Position
+      description: Which seat to control.
+      required: true
+      selector:
+        select:
+          options:
+            - "driver"
+            - "copilot"
+    mode:
+      name: Mode
+      description: Heating or ventilation.
+      required: true
+      selector:
+        select:
+          options:
+            - "heat"
+            - "ventilation"
+    level:
+      name: Level
+      description: Intensity level.
+      required: true
+      selector:
+        select:
+          options:
+            - "off"
+            - "low"
+            - "high"
+
+schedule_climate:
+  name: Schedule climate
+  description: Schedule cabin pre-conditioning to run at a specific time.
+  fields:
+    device_id:
+      name: Vehicle
+      description: The BYD vehicle to target.
+      required: true
+      selector:
+        device:
+          integration: byd
+    temperature:
+      name: Temperature
+      description: Target cabin temperature in degrees Celsius.
+      required: true
+      selector:
+        number:
+          min: 15
+          max: 31
+          step: 0.5
+          unit_of_measurement: "°C"
+    booking_time:
+      name: Booking time
+      description: When the pre-conditioning should run.
+      required: true
+      selector:
+        datetime:
+    time_span:
+      name: Duration
+      description: "Run duration code (1=10min, 2=15min, 3=20min, 4=25min, 5=30min)."
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 5
+          step: 1
+          mode: box
+
+save_charging_schedule:
+  name: Save charging schedule
+  description: Configure a smart-charging window.
+  fields:
+    device_id:
+      name: Vehicle
+      description: The BYD vehicle to target.
+      required: true
+      selector:
+        device:
+          integration: byd
+    start_charge_time:
+      name: Start time
+      description: "Charging window start (HH:MM, 24-hour)."
+      required: true
+      selector:
+        text:
+    end_charge_time:
+      name: End time
+      description: "Charging window end (HH:MM, 24-hour)."
+      required: true
+      selector:
+        text:
+    charge_way:
+      name: Charge mode
+      description: BYD charge mode identifier.
+      required: false
+      default: "1"
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Whether the schedule is active.
+      required: false
+      default: true
+      selector:
+        boolean:
+
+verify_command_access:
+  name: Verify command access
+  description: Verify the control PIN so remote commands can be issued this session.
+  fields:
+    device_id:
+      name: Vehicle
+      description: The BYD vehicle to target.
+      required: true
+      selector:
+        device:
+          integration: byd

@@ -1,0 +1,14 @@
+{
+  "domain": "byd",
+  "name": "BYD Integration",
+  "codeowners": ["@RangerDjanger"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/RangerDjanger/byd-homeassistant",
+  "integration_type": "device",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/RangerDjanger/byd-homeassistant/issues",
+  "loggers": ["custom_components.byd", "pybyd"],
+  "requirements": [],
+  "version": "0.1.0"
+}
