@@ -9,6 +9,6 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/RangerDjanger/byd-homeassistant/issues",
   "loggers": ["custom_components.byd", "pybyd"],
-  "requirements": [],
+  "requirements": ["pydantic>=2"],
   "version": "0.1.0"
 }

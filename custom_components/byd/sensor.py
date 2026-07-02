@@ -23,10 +23,11 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util.unit_conversion import PressureConverter
 from pybyd._state_engine import VehicleSnapshot  # noqa: E402
 from pybyd.models.realtime import TirePressureUnit  # noqa: E402
 
-from .const import DOMAIN
+from .const import CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT, DOMAIN
 from .coordinator import BydDataUpdateCoordinator
 from .entity import BydBaseEntity
 
@@ -34,6 +35,14 @@ _TIRE_UNIT_MAP = {
     TirePressureUnit.BAR: UnitOfPressure.BAR,
     TirePressureUnit.PSI: UnitOfPressure.PSI,
     TirePressureUnit.KPA: UnitOfPressure.KPA,
+}
+
+# Options-flow pressure unit choice -> HA unit. "default" is absent, meaning
+# "keep the unit the vehicle reports".
+_PRESSURE_OPT_MAP = {
+    "kpa": UnitOfPressure.KPA,
+    "psi": UnitOfPressure.PSI,
+    "bar": UnitOfPressure.BAR,
 }
 
 
@@ -243,15 +252,45 @@ class BydSensor(BydBaseEntity, SensorEntity):
         super().__init__(coordinator, vin, description.key)
         self.entity_description = description
 
+    def _pressure_target_unit(self) -> str | None:
+        """Configured pressure unit for tyre sensors, or None to keep native."""
+        if self.entity_description.device_class != SensorDeviceClass.PRESSURE:
+            return None
+        choice = self.coordinator.config_entry.options.get(
+            CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT
+        )
+        return _PRESSURE_OPT_MAP.get((choice or "").lower())
+
+    def _native_source_unit(self, snapshot: VehicleSnapshot) -> str | None:
+        """Unit the vehicle reports this sensor in."""
+        if self.entity_description.unit_fn is not None:
+            unit = self.entity_description.unit_fn(snapshot)
+            if unit is not None:
+                return unit
+        return self.entity_description.native_unit_of_measurement
+
     @property
     def native_value(self) -> Any:
         snapshot = self.snapshot
         if snapshot is None:
             return None
-        return self.entity_description.value_fn(snapshot)
+        value = self.entity_description.value_fn(snapshot)
+        target = self._pressure_target_unit()
+        if target is not None and value is not None:
+            # BYD reports kPa when the vehicle's own unit is unavailable.
+            source = self._native_source_unit(snapshot) or UnitOfPressure.KPA
+            if source != target:
+                try:
+                    return round(PressureConverter.convert(float(value), source, target), 1)
+                except (TypeError, ValueError):
+                    return value
+        return value
 
     @property
     def native_unit_of_measurement(self) -> str | None:
+        target = self._pressure_target_unit()
+        if target is not None:
+            return target
         snapshot = self.snapshot
         if snapshot is not None and self.entity_description.unit_fn is not None:
             unit = self.entity_description.unit_fn(snapshot)

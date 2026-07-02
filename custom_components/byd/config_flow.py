@@ -12,6 +12,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from pybyd import BydAuthenticationError, BydClient, BydConfig, BydError  # noqa: E402
 import voluptuous as vol
@@ -22,17 +23,47 @@ from .const import (
     CONF_COUNTRY_CODE,
     CONF_ENABLE_MQTT,
     CONF_PASSWORD,
+    CONF_PRESSURE_UNIT,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
+    COUNTRIES,
     DEFAULT_BASE_URL,
     DEFAULT_COUNTRY_CODE,
     DEFAULT_ENABLE_MQTT,
+    DEFAULT_PRESSURE_UNIT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    MIN_SCAN_INTERVAL,
+    base_url_for_country,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Fixed polling-interval choices offered in the options flow. Values are
+# seconds (stored as strings by the select selector); the coordinator coerces
+# them back to int.
+SCAN_INTERVAL_OPTIONS = [
+    selector.SelectOptionDict(value="30", label="30 seconds"),
+    selector.SelectOptionDict(value="60", label="1 minute"),
+    selector.SelectOptionDict(value="120", label="2 minutes"),
+    selector.SelectOptionDict(value="180", label="3 minutes"),
+    selector.SelectOptionDict(value="240", label="4 minutes"),
+]
+
+# Country dropdown offered at setup. Value is the ISO code stored as
+# CONF_COUNTRY_CODE; the API base URL is derived from it. Labelled by country
+# name so the user never has to know the endpoint.
+COUNTRY_OPTIONS = [
+    selector.SelectOptionDict(value=code, label=name) for code, name, _node in COUNTRIES
+]
+
+# Tyre-pressure display unit choices for the options flow. "default" keeps the
+# unit the vehicle reports.
+PRESSURE_UNIT_OPTIONS = [
+    selector.SelectOptionDict(value="default", label="Vehicle default"),
+    selector.SelectOptionDict(value="kPa", label="kPa"),
+    selector.SelectOptionDict(value="psi", label="psi"),
+    selector.SelectOptionDict(value="bar", label="bar"),
+]
 
 
 async def _validate_login(hass, data: dict[str, Any]) -> None:
@@ -67,6 +98,7 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            user_input = self._normalize_endpoint(user_input)
             await self.async_set_unique_id(user_input[CONF_USERNAME].strip().lower())
             self._abort_if_unique_id_configured()
             try:
@@ -129,6 +161,20 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
+    def _normalize_endpoint(user_input: dict[str, Any]) -> dict[str, Any]:
+        """Derive the API base URL from the chosen country.
+
+        A non-empty manual ``base_url`` (advanced field, for grey imports)
+        always wins; otherwise the endpoint is looked up from the country.
+        """
+        data = dict(user_input)
+        country = (data.get(CONF_COUNTRY_CODE) or DEFAULT_COUNTRY_CODE).upper()
+        data[CONF_COUNTRY_CODE] = country
+        override = (data.get(CONF_BASE_URL) or "").strip()
+        data[CONF_BASE_URL] = override or base_url_for_country(country)
+        return data
+
+    @staticmethod
     def _user_schema(user_input: dict[str, Any] | None) -> vol.Schema:
         data = user_input or {}
         return vol.Schema(
@@ -136,10 +182,17 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_USERNAME, default=data.get(CONF_USERNAME, "")): str,
                 vol.Required(CONF_PASSWORD, default=data.get(CONF_PASSWORD, "")): str,
                 vol.Optional(CONF_CONTROL_PIN, default=data.get(CONF_CONTROL_PIN, "")): str,
-                vol.Optional(
-                    CONF_COUNTRY_CODE, default=data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE)
-                ): str,
-                vol.Optional(CONF_BASE_URL, default=data.get(CONF_BASE_URL, DEFAULT_BASE_URL)): str,
+                vol.Required(
+                    CONF_COUNTRY_CODE,
+                    default=data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=COUNTRY_OPTIONS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                        custom_value=True,
+                    )
+                ),
+                vol.Optional(CONF_BASE_URL, default=data.get(CONF_BASE_URL, "")): str,
             }
         )
 
@@ -167,8 +220,22 @@ class BydOptionsFlow(OptionsFlow):
                 {
                     vol.Optional(
                         CONF_SCAN_INTERVAL,
-                        default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL)),
+                        default=str(options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=SCAN_INTERVAL_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_PRESSURE_UNIT,
+                        default=options.get(CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=PRESSURE_UNIT_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                     vol.Optional(
                         CONF_ENABLE_MQTT,
                         default=options.get(CONF_ENABLE_MQTT, DEFAULT_ENABLE_MQTT),

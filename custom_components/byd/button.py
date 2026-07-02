@@ -78,8 +78,11 @@ async def async_setup_entry(
 ) -> None:
     """Set up BYD buttons."""
     coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[BydButton] = []
+    entities: list[ButtonEntity] = []
     for vin, car in coordinator.cars.items():
+        # A manual refresh/sync button is always offered; it needs no control
+        # PIN and no vehicle capability, just a coordinator poll.
+        entities.append(BydRefreshButton(coordinator, vin))
         for description in BUTTONS:
             if getattr(car.capabilities, description.capability, None):
                 entities.append(BydButton(coordinator, vin, description))
@@ -102,3 +105,26 @@ class BydButton(BydBaseEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.async_run_command(lambda: self.entity_description.press_fn(self.car))
+
+
+class BydRefreshButton(BydBaseEntity, ButtonEntity):
+    """Manual data refresh (sync) button.
+
+    Triggers an immediate coordinator poll. Unlike the command buttons it
+    needs no control PIN, so it works even before a PIN is configured, and it
+    stays available after a failed poll so the user can retry.
+    """
+
+    _attr_translation_key = "refresh"
+    _attr_icon = "mdi:refresh"
+
+    def __init__(self, coordinator: BydDataUpdateCoordinator, vin: str) -> None:
+        super().__init__(coordinator, vin, "refresh")
+
+    @property
+    def available(self) -> bool:
+        """Always available so a sync can be forced even after a failed poll."""
+        return True
+
+    async def async_press(self) -> None:
+        await self.coordinator.async_request_refresh()

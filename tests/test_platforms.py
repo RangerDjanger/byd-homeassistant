@@ -22,6 +22,7 @@ from pybyd.models.realtime import (
     OnlineState,
     SeatHeatVentState,
     StearingWheelHeat,
+    TirePressureUnit,
     VehicleRealtimeData,
     WindowState,
 )
@@ -188,3 +189,70 @@ def test_lock_is_locked_via_realtime_property() -> None:
     assert locked.is_locked is True
     assert unlocked.is_locked is False
     assert VehicleRealtimeData().is_locked is None
+
+
+# ---------------------------------------------------------------------------
+# region endpoint derivation (country dropdown -> base URL)
+# ---------------------------------------------------------------------------
+
+
+def test_base_url_for_country_maps_regions() -> None:
+    from custom_components.byd import const
+
+    assert const.base_url_for_country("AU") == "https://dilinkappoversea-au.byd.auto"
+    assert const.base_url_for_country("nz") == "https://dilinkappoversea-au.byd.auto"
+    assert const.base_url_for_country("GB") == "https://dilinkappoversea-eu.byd.auto"
+    # Norway is on the EU node, not the "-no" (Middle East/Africa) node.
+    assert const.base_url_for_country("NO") == "https://dilinkappoversea-eu.byd.auto"
+    assert const.base_url_for_country("AE") == "https://dilinkappoversea-no.byd.auto"
+    # Unknown/empty codes fall back to the default endpoint.
+    assert const.base_url_for_country("ZZ") == const.DEFAULT_BASE_URL
+    assert const.base_url_for_country(None) == const.DEFAULT_BASE_URL
+
+
+def test_every_country_maps_to_a_known_node() -> None:
+    from custom_components.byd import const
+
+    assert const.DEFAULT_COUNTRY_CODE in const.COUNTRY_TO_BASE_URL
+    for code, name, node in const.COUNTRIES:
+        assert node in const.NODE_BASE_URLS, f"{code} ({name}) has unknown node {node}"
+
+
+# ---------------------------------------------------------------------------
+# tyre pressure unit option
+# ---------------------------------------------------------------------------
+
+
+def _tire_sensor(pressure_unit: str):
+    from unittest.mock import MagicMock
+
+    from custom_components.byd import sensor as sensor_mod
+
+    desc = next(d for d in sensor_mod.SENSORS if d.key == "tire_pressure_front_left")
+    coord = MagicMock()
+    coord.get_snapshot.return_value = _snap(
+        realtime=VehicleRealtimeData(
+            left_front_tire_pressure=236.0, tire_press_unit=TirePressureUnit.KPA
+        )
+    )
+    coord.device_meta.return_value = {
+        "name": "x",
+        "manufacturer": "BYD",
+        "model": None,
+        "sw_version": None,
+    }
+    coord.config_entry.options = {"pressure_unit": pressure_unit}
+    return sensor_mod.BydSensor(coord, "LTEST0000000000", desc)
+
+
+def test_tire_pressure_default_keeps_vehicle_unit() -> None:
+    ent = _tire_sensor("default")
+    assert ent.native_unit_of_measurement == "kPa"
+    assert ent.native_value == 236.0
+
+
+def test_tire_pressure_option_converts_to_psi() -> None:
+    ent = _tire_sensor("psi")
+    assert ent.native_unit_of_measurement == "psi"
+    # 236 kPa ≈ 34.2 psi
+    assert 34.0 <= ent.native_value <= 34.4

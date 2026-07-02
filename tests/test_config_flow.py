@@ -11,11 +11,17 @@ from pybyd import BydAuthenticationError, BydError
 import pytest
 
 from custom_components.byd.const import (
+    CONF_BASE_URL,
     CONF_CONTROL_PIN,
+    CONF_COUNTRY_CODE,
     CONF_ENABLE_MQTT,
     CONF_PASSWORD,
+    CONF_PRESSURE_UNIT,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
+    DEFAULT_BASE_URL,
+    DEFAULT_COUNTRY_CODE,
+    DEFAULT_PRESSURE_UNIT,
     DOMAIN,
 )
 
@@ -48,7 +54,12 @@ async def test_user_flow_success(hass: HomeAssistant) -> None:
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == USER_INPUT[CONF_USERNAME]
-    assert result["data"] == USER_INPUT
+    # The country defaults to AU and the API base URL is derived from it.
+    assert result["data"] == {
+        **USER_INPUT,
+        CONF_COUNTRY_CODE: DEFAULT_COUNTRY_CODE,
+        CONF_BASE_URL: DEFAULT_BASE_URL,
+    }
     assert result["result"].unique_id == "driver@example.com"
 
 
@@ -166,8 +177,12 @@ async def test_options_flow(hass: HomeAssistant) -> None:
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_SCAN_INTERVAL: 120, CONF_ENABLE_MQTT: False},
+        {CONF_SCAN_INTERVAL: "120", CONF_PRESSURE_UNIT: "psi", CONF_ENABLE_MQTT: False},
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {CONF_SCAN_INTERVAL: 120, CONF_ENABLE_MQTT: False}
+    assert result["data"] == {
+        CONF_SCAN_INTERVAL: "120",
+        CONF_PRESSURE_UNIT: "psi",
+        CONF_ENABLE_MQTT: False,
+    }

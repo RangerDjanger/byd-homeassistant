@@ -8,13 +8,13 @@
           "username": "Username",
           "password": "Password",
           "control_pin": "Control PIN",
-          "country_code": "Country code",
-          "base_url": "API base URL"
+          "country_code": "Country",
+          "base_url": "API base URL (advanced)"
         },
         "data_description": {
           "control_pin": "Required to send remote commands (lock, climate, etc.).",
-          "country_code": "Two-letter country code used by your BYD account.",
-          "base_url": "Regional BYD API endpoint. Leave the default unless instructed otherwise."
+          "country_code": "Select the country your BYD account is registered in. This picks the correct regional server automatically.",
+          "base_url": "Leave blank. Advanced override for the regional endpoint (grey imports only)."
         }
       },
       "reauth_confirm": {
@@ -41,11 +41,13 @@
       "init": {
         "title": "BYD options",
         "data": {
-          "scan_interval": "Polling interval (seconds)",
+          "scan_interval": "Polling interval",
+          "pressure_unit": "Tyre pressure unit",
           "enable_mqtt": "Enable realtime (MQTT) updates"
         },
         "data_description": {
           "scan_interval": "How often to poll the BYD cloud as a fallback to realtime updates.",
+          "pressure_unit": "Display unit for the four tyre-pressure sensors. 'Vehicle default' keeps the unit the car reports.",
           "enable_mqtt": "When enabled, live pushes reduce the need for polling."
         }
       }
@@ -136,6 +138,7 @@
       "battery_heat": { "name": "Battery heating" }
     },
     "button": {
+      "refresh": { "name": "Refresh" },
       "find_car": { "name": "Find car" },
       "flash_lights": { "name": "Flash lights" },
       "close_windows": { "name": "Close windows" },
