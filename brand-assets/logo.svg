@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="160" viewBox="0 0 512 160" role="img" aria-label="BYD for Home Assistant">
+  <!-- EV charge bolt -->
+  <path d="M52 24 L18 82 H42 L32 136 L82 66 H54 L68 24 Z" fill="#39E08A"/>
+  <!-- BYD wordmark -->
+  <text x="104" y="104"
+        font-family="'Segoe UI', Arial, Helvetica, sans-serif" font-weight="800"
+        font-size="92" letter-spacing="1" fill="#0A46C8">BYD</text>
+  <!-- divider -->
+  <rect x="322" y="34" width="4" height="92" rx="2" fill="#B8C4D8"/>
+  <!-- Home Assistant descriptor -->
+  <text x="344" y="72"
+        font-family="'Segoe UI', Arial, Helvetica, sans-serif" font-weight="700"
+        font-size="34" fill="#3A4657">Home</text>
+  <text x="344" y="112"
+        font-family="'Segoe UI', Arial, Helvetica, sans-serif" font-weight="700"
+        font-size="34" fill="#3A4657">Assistant</text>
+</svg>

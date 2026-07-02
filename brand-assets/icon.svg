@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="BYD Home Assistant">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2AA5FF"/>
+      <stop offset="1" stop-color="#0A46C8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#bg)"/>
+  <text x="128" y="132" text-anchor="middle"
+        font-family="'Segoe UI', Arial, Helvetica, sans-serif" font-weight="800"
+        font-size="90" letter-spacing="1" fill="#FFFFFF">BYD</text>
+  <!-- EV charge bolt -->
+  <path d="M134 156 L112 194 H127 L121 220 L150 186 H134 L141 156 Z" fill="#39E08A"/>
+</svg>
