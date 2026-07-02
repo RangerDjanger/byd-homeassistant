@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pybyd import BydCar, SeatLevel, SeatPosition  # noqa: E402
 from pybyd._state_engine import VehicleSnapshot  # noqa: E402
-from pybyd.models.realtime import SeatHeatVentState, StearingWheelHeat  # noqa: E402
+from pybyd.models.realtime import SeatHeatVentState  # noqa: E402
 
 from . import _vendored  # noqa: F401
 from .const import DOMAIN
@@ -35,17 +35,11 @@ def _seat_on(attr: str) -> Callable[[VehicleSnapshot], bool | None]:
 
 
 def _steering_on(s: VehicleSnapshot) -> bool | None:
-    value = _rt(s, "steering_wheel_heat_state")
-    if value is None or value == StearingWheelHeat.UNKNOWN:
-        return None
-    return value == StearingWheelHeat.ON
+    return s.realtime.is_steering_wheel_heating if s.realtime else None
 
 
 def _battery_heat_on(s: VehicleSnapshot) -> bool | None:
-    value = _rt(s, "charge_heat_state")
-    if value is None:
-        return None
-    return value == 1
+    return s.realtime.is_battery_heating if s.realtime else None
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -12,7 +12,9 @@ import pytest
 
 from custom_components.byd.const import (
     CONF_CONTROL_PIN,
+    CONF_ENABLE_MQTT,
     CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     DOMAIN,
 )
@@ -76,3 +78,96 @@ async def test_user_flow_errors(
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": expected_error}
+
+
+async def test_user_flow_aborts_on_duplicate(hass: HomeAssistant) -> None:
+    """A second entry for the same account is rejected."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    MockConfigEntry(
+        domain=DOMAIN, unique_id="driver@example.com", data=USER_INPUT
+    ).add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    with patch(
+        "custom_components.byd.config_flow._validate_login",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], USER_INPUT
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+
+
+async def test_reauth_flow_success(hass: HomeAssistant) -> None:
+    """Reauth updates stored credentials on a valid login."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="driver@example.com", data=USER_INPUT
+    )
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+
+    with patch(
+        "custom_components.byd.config_flow._validate_login",
+        new=AsyncMock(return_value=None),
+    ), patch("custom_components.byd.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: "newpass", CONF_CONTROL_PIN: "9999"}
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_PASSWORD] == "newpass"
+    assert entry.data[CONF_CONTROL_PIN] == "9999"
+
+
+async def test_reauth_flow_invalid_auth(hass: HomeAssistant) -> None:
+    """A bad reauth login keeps the form open with an error."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id="driver@example.com", data=USER_INPUT
+    )
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reauth_flow(hass)
+    with patch(
+        "custom_components.byd.config_flow._validate_login",
+        new=AsyncMock(side_effect=BydAuthenticationError("nope")),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: "wrong"}
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_auth"}
+
+
+async def test_options_flow(hass: HomeAssistant) -> None:
+    """The options flow stores scan interval and MQTT toggle."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain=DOMAIN, data=USER_INPUT)
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 120, CONF_ENABLE_MQTT: False},
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {CONF_SCAN_INTERVAL: 120, CONF_ENABLE_MQTT: False}

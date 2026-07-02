@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 import logging
 from typing import Any
@@ -30,9 +29,12 @@ from .const import (
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
+    DEFAULT_BASE_URL,
+    DEFAULT_COUNTRY_CODE,
     DEFAULT_ENABLE_MQTT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MANUFACTURER,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,8 +73,8 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
             control_pin=entry.data.get(CONF_CONTROL_PIN),
-            country_code=entry.data.get(CONF_COUNTRY_CODE) or "NL",
-            base_url=entry.data.get(CONF_BASE_URL) or "https://dilinkappoversea-eu.byd.auto",
+            country_code=entry.data.get(CONF_COUNTRY_CODE) or DEFAULT_COUNTRY_CODE,
+            base_url=entry.data.get(CONF_BASE_URL) or DEFAULT_BASE_URL,
             mqtt_enabled=enable_mqtt,
         )
 
@@ -163,11 +165,6 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
         await self.client.verify_command_access(vin)
         self._commands_verified.add(vin)
 
-    async def async_request_refresh_soon(self) -> None:
-        """Trigger a refresh shortly after a command to reconcile state."""
-        await asyncio.sleep(0)
-        await self.async_request_refresh()
-
     def get_snapshot(self, vin: str) -> VehicleSnapshot | None:
         """Return the latest snapshot for a VIN."""
         if self.data is None:
@@ -183,10 +180,10 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
         """Return device metadata fields for a VIN."""
         vehicle = self.vehicles.get(vin)
         if vehicle is None:
-            return {"name": vin, "model": None, "manufacturer": "BYD", "sw_version": None}
+            return {"name": vin, "model": None, "manufacturer": MANUFACTURER, "sw_version": None}
         return {
             "name": vehicle.auto_alias or vehicle.model_name or vin,
             "model": vehicle.model_name or None,
-            "manufacturer": vehicle.brand_name or "BYD",
+            "manufacturer": vehicle.brand_name or MANUFACTURER,
             "sw_version": vehicle.tbox_version or None,
         }

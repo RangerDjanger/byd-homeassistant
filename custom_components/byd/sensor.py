@@ -50,13 +50,27 @@ def _rt(snapshot: VehicleSnapshot, attr: str) -> Any:
 
 def _time_to_full(snapshot: VehicleSnapshot) -> int | None:
     rt = snapshot.realtime
-    if rt is None:
+    return rt.time_to_full_minutes if rt is not None else None
+
+
+def _energy_avg(snapshot: VehicleSnapshot) -> Any:
+    energy = snapshot.energy
+    if energy is None:
         return None
-    hours = rt.full_hour
-    minutes = rt.full_minute
-    if hours is None and minutes is None:
+    for section in (energy.cumulative_energy_consumption, energy.nearest_energy_consumption):
+        if section is not None and section.avg_ev_consumption is not None:
+            return section.avg_ev_consumption
+    return None
+
+
+def _energy_unit(snapshot: VehicleSnapshot) -> str | None:
+    energy = snapshot.energy
+    if energy is None:
         return None
-    return (hours or 0) * 60 + (minutes or 0)
+    for section in (energy.cumulative_energy_consumption, energy.nearest_energy_consumption):
+        if section is not None and section.ev_unit:
+            return section.ev_unit
+    return None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -195,8 +209,8 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         key="avg_energy_consumption",
         translation_key="avg_energy_consumption",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: getattr(s.energy, "avg_ev_consumption", None) if s.energy else None,
-        unit_fn=lambda s: (getattr(s.energy, "ev_unit", None) or None) if s.energy else None,
+        value_fn=_energy_avg,
+        unit_fn=_energy_unit,
     ),
 )
 

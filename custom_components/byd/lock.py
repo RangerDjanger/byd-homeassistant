@@ -8,18 +8,10 @@ from homeassistant.components.lock import LockEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pybyd.models.realtime import LockState  # noqa: E402
 
 from .const import DOMAIN
 from .coordinator import BydDataUpdateCoordinator
 from .entity import BydBaseEntity
-
-_LOCK_ATTRS = (
-    "left_front_door_lock",
-    "right_front_door_lock",
-    "left_rear_door_lock",
-    "right_rear_door_lock",
-)
 
 
 async def async_setup_entry(
@@ -49,13 +41,7 @@ class BydLock(BydBaseEntity, LockEntity):
         snapshot = self.snapshot
         if snapshot is None or snapshot.realtime is None:
             return None
-        states = [getattr(snapshot.realtime, attr, None) for attr in _LOCK_ATTRS]
-        known = [s for s in states if s not in (None, LockState.UNKNOWN, LockState.UNAVAILABLE)]
-        if not known:
-            return None
-        if any(s == LockState.UNLOCKED for s in known):
-            return False
-        return all(s == LockState.LOCKED for s in known)
+        return snapshot.realtime.is_locked
 
     async def async_lock(self, **kwargs: Any) -> None:
         await self.async_run_command(self.car.lock.lock)
