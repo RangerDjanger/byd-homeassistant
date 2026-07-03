@@ -43,12 +43,22 @@
         "data": {
           "scan_interval": "Polling interval",
           "pressure_unit": "Tyre pressure unit",
-          "enable_mqtt": "Enable realtime (MQTT) updates"
+          "enable_mqtt": "Enable realtime (MQTT) updates",
+          "quiet_hours_enabled": "Quiet hours",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_scan_interval": "Quiet hours polling interval",
+          "charging_scan_interval": "Charging polling interval (quiet hours)"
         },
         "data_description": {
           "scan_interval": "How often to poll the BYD cloud as a fallback to realtime updates.",
           "pressure_unit": "Display unit for the four tyre-pressure sensors. 'Vehicle default' keeps the unit the car reports.",
-          "enable_mqtt": "When enabled, live pushes reduce the need for polling."
+          "enable_mqtt": "When enabled, live pushes reduce the need for polling.",
+          "quiet_hours_enabled": "Slow down overnight polling to save traffic. While charging, polling speeds up to the charging interval so charge level and time-to-full stay up to date.",
+          "quiet_start": "When quiet hours begin (local time).",
+          "quiet_end": "When quiet hours end (local time). A window like 22:00–07:00 that crosses midnight is handled correctly.",
+          "quiet_scan_interval": "How often to poll during quiet hours while not charging.",
+          "charging_scan_interval": "How often to poll during quiet hours while a vehicle is charging."
         }
       }
     }

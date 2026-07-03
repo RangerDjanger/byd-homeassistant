@@ -19,18 +19,28 @@ import voluptuous as vol
 
 from .const import (
     CONF_BASE_URL,
+    CONF_CHARGING_SCAN_INTERVAL,
     CONF_CONTROL_PIN,
     CONF_COUNTRY_CODE,
     CONF_ENABLE_MQTT,
     CONF_PASSWORD,
     CONF_PRESSURE_UNIT,
+    CONF_QUIET_END,
+    CONF_QUIET_HOURS_ENABLED,
+    CONF_QUIET_SCAN_INTERVAL,
+    CONF_QUIET_START,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     COUNTRIES,
     DEFAULT_BASE_URL,
+    DEFAULT_CHARGING_SCAN_INTERVAL,
     DEFAULT_COUNTRY_CODE,
     DEFAULT_ENABLE_MQTT,
     DEFAULT_PRESSURE_UNIT,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_HOURS_ENABLED,
+    DEFAULT_QUIET_SCAN_INTERVAL,
+    DEFAULT_QUIET_START,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     base_url_for_country,
@@ -47,6 +57,8 @@ SCAN_INTERVAL_OPTIONS = [
     selector.SelectOptionDict(value="120", label="2 minutes"),
     selector.SelectOptionDict(value="180", label="3 minutes"),
     selector.SelectOptionDict(value="240", label="4 minutes"),
+    selector.SelectOptionDict(value="300", label="5 minutes"),
+    selector.SelectOptionDict(value="600", label="10 minutes"),
 ]
 
 # Country dropdown offered at setup. Value is the ISO code stored as
@@ -54,6 +66,23 @@ SCAN_INTERVAL_OPTIONS = [
 # name so the user never has to know the endpoint.
 COUNTRY_OPTIONS = [
     selector.SelectOptionDict(value=code, label=name) for code, name, _node in COUNTRIES
+]
+
+# Slower polling cadences offered for the quiet-hours window. Values are
+# seconds, stored as strings by the select selector.
+QUIET_SCAN_INTERVAL_OPTIONS = [
+    selector.SelectOptionDict(value="900", label="15 minutes"),
+    selector.SelectOptionDict(value="1800", label="30 minutes"),
+    selector.SelectOptionDict(value="3600", label="1 hour"),
+]
+
+# Polling cadences offered for "charging during quiet hours". Frequent enough to
+# track charge % / time-to-full, but lighter than the daytime scan rate.
+CHARGING_SCAN_INTERVAL_OPTIONS = [
+    selector.SelectOptionDict(value="60", label="1 minute"),
+    selector.SelectOptionDict(value="120", label="2 minutes"),
+    selector.SelectOptionDict(value="300", label="5 minutes"),
+    selector.SelectOptionDict(value="600", label="10 minutes"),
 ]
 
 # Tyre-pressure display unit choices for the options flow. "default" keeps the
@@ -240,6 +269,47 @@ class BydOptionsFlow(OptionsFlow):
                         CONF_ENABLE_MQTT,
                         default=options.get(CONF_ENABLE_MQTT, DEFAULT_ENABLE_MQTT),
                     ): bool,
+                    vol.Optional(
+                        CONF_QUIET_HOURS_ENABLED,
+                        default=options.get(
+                            CONF_QUIET_HOURS_ENABLED, DEFAULT_QUIET_HOURS_ENABLED
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_QUIET_START,
+                        default=options.get(CONF_QUIET_START, DEFAULT_QUIET_START),
+                    ): selector.TimeSelector(),
+                    vol.Optional(
+                        CONF_QUIET_END,
+                        default=options.get(CONF_QUIET_END, DEFAULT_QUIET_END),
+                    ): selector.TimeSelector(),
+                    vol.Optional(
+                        CONF_QUIET_SCAN_INTERVAL,
+                        default=str(
+                            options.get(
+                                CONF_QUIET_SCAN_INTERVAL, DEFAULT_QUIET_SCAN_INTERVAL
+                            )
+                        ),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=QUIET_SCAN_INTERVAL_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_CHARGING_SCAN_INTERVAL,
+                        default=str(
+                            options.get(
+                                CONF_CHARGING_SCAN_INTERVAL,
+                                DEFAULT_CHARGING_SCAN_INTERVAL,
+                            )
+                        ),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=CHARGING_SCAN_INTERVAL_OPTIONS,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
         )

@@ -19,6 +19,11 @@ CONF_BASE_URL = "base_url"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_ENABLE_MQTT = "enable_mqtt"
 CONF_PRESSURE_UNIT = "pressure_unit"
+CONF_QUIET_HOURS_ENABLED = "quiet_hours_enabled"
+CONF_QUIET_START = "quiet_start"
+CONF_QUIET_END = "quiet_end"
+CONF_QUIET_SCAN_INTERVAL = "quiet_scan_interval"
+CONF_CHARGING_SCAN_INTERVAL = "charging_scan_interval"
 
 # Defaults
 DEFAULT_SCAN_INTERVAL = 60
@@ -26,6 +31,14 @@ MIN_SCAN_INTERVAL = 30
 DEFAULT_ENABLE_MQTT = True
 # "default" keeps the unit the vehicle reports; otherwise "kPa" / "psi" / "bar".
 DEFAULT_PRESSURE_UNIT = "default"
+# Quiet hours: slow polling overnight unless a vehicle is actively charging.
+DEFAULT_QUIET_HOURS_ENABLED = False
+DEFAULT_QUIET_START = "22:00:00"
+DEFAULT_QUIET_END = "07:00:00"
+DEFAULT_QUIET_SCAN_INTERVAL = 1800
+# While charging during quiet hours, poll at this cadence so charge % and
+# time-to-full stay reasonably fresh without waking to the full scan rate.
+DEFAULT_CHARGING_SCAN_INTERVAL = 300
 DEFAULT_COUNTRY_CODE = "AU"
 DEFAULT_BASE_URL = "https://dilinkappoversea-au.byd.auto"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import time as dt_time
 from datetime import timedelta
 import logging
 from typing import Any
@@ -11,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 from pybyd import (  # noqa: E402  # import after vendored path setup
     BydAuthenticationError,
     BydCar,
@@ -23,15 +25,25 @@ from pybyd._state_engine import VehicleSnapshot  # noqa: E402
 
 from .const import (
     CONF_BASE_URL,
+    CONF_CHARGING_SCAN_INTERVAL,
     CONF_CONTROL_PIN,
     CONF_COUNTRY_CODE,
     CONF_ENABLE_MQTT,
     CONF_PASSWORD,
+    CONF_QUIET_END,
+    CONF_QUIET_HOURS_ENABLED,
+    CONF_QUIET_SCAN_INTERVAL,
+    CONF_QUIET_START,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     DEFAULT_BASE_URL,
+    DEFAULT_CHARGING_SCAN_INTERVAL,
     DEFAULT_COUNTRY_CODE,
     DEFAULT_ENABLE_MQTT,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_HOURS_ENABLED,
+    DEFAULT_QUIET_SCAN_INTERVAL,
+    DEFAULT_QUIET_START,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MANUFACTURER,
@@ -48,12 +60,14 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.config_entry = entry
 
-        scan_interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+        self._scan_interval = int(
+            entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        )
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval),
+            update_interval=timedelta(seconds=self._scan_interval),
         )
 
         self.client: BydClient | None = None
@@ -130,7 +144,75 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
             except BydError as err:
                 _LOGGER.debug("Polling failed for %s: %s", vin, err)
             snapshots[vin] = car.state
+        self._apply_dynamic_interval(snapshots)
         return snapshots
+
+    # ------------------------------------------------------------------
+    # Quiet hours / dynamic polling interval
+    # ------------------------------------------------------------------
+
+    def _apply_dynamic_interval(
+        self, snapshots: dict[str, VehicleSnapshot]
+    ) -> None:
+        """Re-evaluate the polling interval after each cycle.
+
+        HA reschedules the next refresh from ``self.update_interval`` once a
+        cycle completes, so mutating it here takes effect from the next poll.
+        """
+        interval = self._compute_update_interval(snapshots)
+        if interval != self.update_interval:
+            _LOGGER.debug(
+                "BYD polling interval -> %ss (was %ss)",
+                int(interval.total_seconds()),
+                int(self.update_interval.total_seconds())
+                if self.update_interval
+                else None,
+            )
+            self.update_interval = interval
+
+    def _compute_update_interval(
+        self, snapshots: dict[str, VehicleSnapshot]
+    ) -> timedelta:
+        """Choose the polling interval for the upcoming cycle.
+
+        Outside quiet hours the normal scan interval always applies. Inside the
+        quiet window we slow right down, except while a vehicle is charging — then
+        we use the (gentler-than-normal) charging interval so charge % and
+        time-to-full stay reasonably fresh.
+        """
+        fast = timedelta(seconds=self._scan_interval)
+        options = self.config_entry.options
+        if not options.get(CONF_QUIET_HOURS_ENABLED, DEFAULT_QUIET_HOURS_ENABLED):
+            return fast
+
+        start = _parse_time(options.get(CONF_QUIET_START), DEFAULT_QUIET_START)
+        end = _parse_time(options.get(CONF_QUIET_END), DEFAULT_QUIET_END)
+        if start == end:
+            # Degenerate window (never / always) — treat as disabled.
+            return fast
+
+        if not _in_window(dt_util.now().time(), start, end):
+            return fast
+
+        if self._any_car_charging(snapshots):
+            charging = int(
+                options.get(
+                    CONF_CHARGING_SCAN_INTERVAL, DEFAULT_CHARGING_SCAN_INTERVAL
+                )
+            )
+            return timedelta(seconds=charging)
+
+        quiet = int(options.get(CONF_QUIET_SCAN_INTERVAL, DEFAULT_QUIET_SCAN_INTERVAL))
+        return timedelta(seconds=quiet)
+
+    @staticmethod
+    def _any_car_charging(snapshots: dict[str, VehicleSnapshot]) -> bool:
+        """Whether any vehicle reports it is actively charging."""
+        for snapshot in snapshots.values():
+            charging = getattr(snapshot, "charging", None)
+            if charging is not None and charging.is_charging:
+                return True
+        return False
 
     async def _poll_car(self, car: BydCar) -> None:
         """Refresh all data sections for one vehicle, tolerating per-section gaps."""
@@ -187,3 +269,23 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
             "manufacturer": vehicle.brand_name or MANUFACTURER,
             "sw_version": vehicle.tbox_version or None,
         }
+
+
+def _parse_time(value: Any, default: str) -> dt_time:
+    """Parse an ``HH:MM[:SS]`` option value, falling back to ``default``."""
+    parsed = dt_util.parse_time(value) if value else None
+    if parsed is None:
+        parsed = dt_util.parse_time(default)
+    assert parsed is not None  # defaults are always valid
+    return parsed
+
+
+def _in_window(now: dt_time, start: dt_time, end: dt_time) -> bool:
+    """Whether ``now`` falls in the ``[start, end)`` window, handling wrap.
+
+    A window where ``start > end`` (e.g. 22:00–07:00) crosses midnight, so a
+    time is inside it when it is at/after the start *or* before the end.
+    """
+    if start <= end:
+        return start <= now < end
+    return now >= start or now < end
