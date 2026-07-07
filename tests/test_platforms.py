@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pybyd import Vehicle
 from pybyd._state_engine import VehicleSnapshot
+from pybyd.models.charging import ChargingStatus
 from pybyd.models.energy import (
     CumulativeEnergyConsumption,
     EnergyConsumption,
@@ -16,7 +17,6 @@ from pybyd.models.energy import (
 )
 from pybyd.models.realtime import (
     ChargingState,
-    ConnectState,
     DoorOpenState,
     LockState,
     OnlineState,
@@ -152,25 +152,100 @@ def test_lock_open_helper_reports_unlocked_as_on() -> None:
     assert fn(_snap(realtime=VehicleRealtimeData(left_front_door_lock=LockState.LOCKED))) is False
 
 
-def test_charging_and_connectivity_helpers() -> None:
-    assert (
-        binary_sensor._charging_on(
-            _snap(realtime=VehicleRealtimeData(charging_state=ChargingState.CHARGING))
-        )
-        is True
-    )
-    assert (
-        binary_sensor._plugged_in(
-            _snap(realtime=VehicleRealtimeData(connect_state=ConnectState.CONNECTED))
-        )
-        is True
-    )
+def test_online_helper() -> None:
     assert (
         binary_sensor._online(
             _snap(realtime=VehicleRealtimeData(online_state=OnlineState.ONLINE))
         )
         is True
     )
+
+
+def test_charging_prefers_smart_charge_section() -> None:
+    # The smart-charge homepage is authoritative and populated while the
+    # decoy realtime.charging_state stays UNKNOWN (the real-world Shark case).
+    snap = _snap(
+        realtime=VehicleRealtimeData(charging_state=ChargingState.UNKNOWN),
+        charging=ChargingStatus(charging_state=1, connect_state=1),
+    )
+    assert binary_sensor._charging_on(snap) is True
+    assert binary_sensor._plugged_in(snap) is True
+
+
+def test_charging_falls_back_to_realtime_charge_state() -> None:
+    # No smart-charge section: fall back to realtime.charge_state (authoritative),
+    # never realtime.charging_state (the decoy the cloud leaves UNKNOWN).
+    snap = _snap(
+        realtime=VehicleRealtimeData(
+            charging_state=ChargingState.UNKNOWN,
+            charge_state=ChargingState.CHARGING,
+        )
+    )
+    assert binary_sensor._charging_on(snap) is True
+
+
+def test_charging_off_and_disconnected() -> None:
+    snap = _snap(charging=ChargingStatus(charging_state=0, connect_state=0))
+    assert binary_sensor._charging_on(snap) is False
+    assert binary_sensor._plugged_in(snap) is False
+
+
+def test_charging_unknown_without_data() -> None:
+    assert binary_sensor._charging_on(_snap()) is None
+    assert binary_sensor._plugged_in(_snap()) is None
+    # The decoy realtime.charging_state alone must not report charging.
+    assert (
+        binary_sensor._charging_on(
+            _snap(realtime=VehicleRealtimeData(charging_state=ChargingState.UNKNOWN))
+        )
+        is None
+    )
+
+
+def test_charging_state_sensor_prefers_charge_state() -> None:
+    snap = _snap(
+        realtime=VehicleRealtimeData(
+            charging_state=ChargingState.UNKNOWN,
+            charge_state=ChargingState.CHARGING,
+        )
+    )
+    assert sensor._charging_state(snap) == "charging"
+
+
+def test_charging_state_sensor_falls_back_to_smart_charge() -> None:
+    assert sensor._charging_state(_snap(charging=ChargingStatus(charging_state=1))) == "charging"
+    assert (
+        sensor._charging_state(_snap(charging=ChargingStatus(charging_state=0)))
+        == "not_charging"
+    )
+
+
+def test_charging_state_sensor_unknown() -> None:
+    assert sensor._charging_state(_snap()) is None
+    assert (
+        sensor._charging_state(
+            _snap(realtime=VehicleRealtimeData(charging_state=ChargingState.UNKNOWN))
+        )
+        is None
+    )
+
+
+def test_connect_state_sensor_uses_smart_charge() -> None:
+    assert sensor._connect_state(_snap(charging=ChargingStatus(connect_state=1))) == "connected"
+    assert (
+        sensor._connect_state(_snap(charging=ChargingStatus(connect_state=0)))
+        == "disconnected"
+    )
+    assert sensor._connect_state(_snap()) is None
+
+
+def test_time_to_full_prefers_smart_charge_section() -> None:
+    # Realtime leaves full_hour/full_minute unset; the smart-charge section has them.
+    snap = _snap(
+        realtime=VehicleRealtimeData(full_hour=None, full_minute=None),
+        charging=ChargingStatus(full_hour=0, full_minute=11),
+    )
+    assert sensor._time_to_full(snap) == 11
 
 
 # ---------------------------------------------------------------------------

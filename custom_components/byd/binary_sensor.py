@@ -17,7 +17,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from pybyd._state_engine import VehicleSnapshot  # noqa: E402
 from pybyd.models.realtime import (  # noqa: E402
     ChargingState,
-    ConnectState,
     DoorOpenState,
     LockState,
     OnlineState,
@@ -73,17 +72,34 @@ def _lock_open(attr: str) -> Callable[[VehicleSnapshot], bool | None]:
 
 
 def _charging_on(s: VehicleSnapshot) -> bool | None:
-    value = _rt(s, "charging_state")
-    if value is None or value == ChargingState.UNKNOWN:
-        return None
-    return value == ChargingState.CHARGING
+    """Whether the vehicle is actively charging.
+
+    The BYD cloud leaves ``realtime.charging_state`` at UNKNOWN for many
+    models (e.g. Shark), so prefer the smart-charge homepage section
+    (``snapshot.charging``), which carries the authoritative live value and
+    is also pushed via MQTT. Fall back to ``realtime.effective_charging_state``
+    (i.e. ``charge_state``) when that section is momentarily absent.
+    """
+    charging = s.charging
+    if charging is not None and charging.charging_state is not None:
+        return charging.is_charging
+    rt = s.realtime
+    if rt is not None and rt.effective_charging_state != ChargingState.UNKNOWN:
+        return rt.effective_charging_state == ChargingState.CHARGING
+    return None
 
 
 def _plugged_in(s: VehicleSnapshot) -> bool | None:
-    value = _rt(s, "connect_state")
-    if value is None or value == ConnectState.UNKNOWN:
+    """Whether the charge gun is connected.
+
+    Sourced from the smart-charge homepage (``connectState``). The realtime
+    ``connect_state`` field is the T-Box link state, not the charge cable,
+    and stays UNKNOWN for many models.
+    """
+    charging = s.charging
+    if charging is None or charging.connect_state is None:
         return None
-    return value == ConnectState.CONNECTED
+    return charging.is_connected
 
 
 def _online(s: VehicleSnapshot) -> bool | None:

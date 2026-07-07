@@ -25,7 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.unit_conversion import PressureConverter
 from pybyd._state_engine import VehicleSnapshot  # noqa: E402
-from pybyd.models.realtime import TirePressureUnit  # noqa: E402
+from pybyd.models.realtime import ChargingState, TirePressureUnit  # noqa: E402
 
 from .const import CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT, DOMAIN
 from .coordinator import BydDataUpdateCoordinator
@@ -57,7 +57,45 @@ def _rt(snapshot: VehicleSnapshot, attr: str) -> Any:
     return getattr(snapshot.realtime, attr, None) if snapshot.realtime else None
 
 
+def _charging_state(snapshot: VehicleSnapshot) -> str | None:
+    """Charging state name for the enum sensor.
+
+    ``realtime.charging_state`` is UNKNOWN for many models, so prefer
+    ``realtime.effective_charging_state`` (``charge_state``), then fall back
+    to the smart-charge homepage section (``snapshot.charging``).
+    """
+    rt = snapshot.realtime
+    if rt is not None and rt.effective_charging_state != ChargingState.UNKNOWN:
+        return _enum_name(rt.effective_charging_state)
+    charging = snapshot.charging
+    if charging is not None and charging.charging_state is not None:
+        return "charging" if charging.is_charging else "not_charging"
+    return None
+
+
+def _connect_state(snapshot: VehicleSnapshot) -> str | None:
+    """Charge-cable connection name for the enum sensor.
+
+    Sourced from the smart-charge homepage (``connectState``); the realtime
+    ``connect_state`` field is the T-Box link, not the charge cable.
+    """
+    charging = snapshot.charging
+    if charging is None or charging.connect_state is None:
+        return None
+    return "connected" if charging.is_connected else "disconnected"
+
+
 def _time_to_full(snapshot: VehicleSnapshot) -> int | None:
+    """Minutes to full charge, preferring the smart-charge homepage section.
+
+    Only the ``snapshot.charging`` section carries ``full_hour``/``full_minute``
+    for most models; the realtime section leaves them unset.
+    """
+    charging = snapshot.charging
+    if charging is not None:
+        minutes = charging.time_to_full_minutes
+        if minutes is not None:
+            return minutes
     rt = snapshot.realtime
     return rt.time_to_full_minutes if rt is not None else None
 
@@ -143,14 +181,14 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         translation_key="charging_state",
         device_class=SensorDeviceClass.ENUM,
         options=["unknown", "not_charging", "charging", "connected"],
-        value_fn=lambda s: _enum_name(_rt(s, "charging_state")),
+        value_fn=_charging_state,
     ),
     BydSensorDescription(
         key="connect_state",
         translation_key="connect_state",
         device_class=SensorDeviceClass.ENUM,
         options=["unknown", "disconnected", "connected"],
-        value_fn=lambda s: _enum_name(_rt(s, "connect_state")),
+        value_fn=_connect_state,
     ),
     BydSensorDescription(
         key="power_gear",
