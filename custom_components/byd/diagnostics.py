@@ -5,18 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from pybyd._redact import redact_for_log  # noqa: E402
+from pybyd._redact import redact_for_log
 
 from .const import (
     CONF_BASE_URL,
     CONF_CONTROL_PIN,
     CONF_PASSWORD,
     CONF_USERNAME,
-    DOMAIN,
 )
-from .coordinator import BydDataUpdateCoordinator
+from .coordinator import BydConfigEntry
 
 TO_REDACT_ENTRY = {CONF_USERNAME, CONF_PASSWORD, CONF_CONTROL_PIN, CONF_BASE_URL}
 TO_REDACT_SNAPSHOT = {"latitude", "longitude", "lat", "lon", "lng", "vin"}
@@ -41,10 +39,10 @@ def _dump_snapshot(snapshot: Any) -> dict[str, Any]:
 
 
 async def async_get_config_entry_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry
+    hass: HomeAssistant, entry: BydConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
 
     vehicles: dict[str, Any] = {}
     for index, (vin, car) in enumerate(coordinator.cars.items()):

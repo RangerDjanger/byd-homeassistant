@@ -12,7 +12,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     UnitOfLength,
@@ -22,14 +21,15 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util.unit_conversion import PressureConverter
-from pybyd._state_engine import VehicleSnapshot  # noqa: E402
-from pybyd.models.realtime import ChargingState, TirePressureUnit  # noqa: E402
+from pybyd._state_engine import VehicleSnapshot
+from pybyd.models.realtime import TirePressureUnit
 
-from .const import CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT, DOMAIN
-from .coordinator import BydDataUpdateCoordinator
+from .const import CONF_PRESSURE_UNIT, DEFAULT_PRESSURE_UNIT
+from .coordinator import BydConfigEntry, BydDataUpdateCoordinator
 from .entity import BydBaseEntity
+from .helpers import is_charging, is_plugged_in, rt, time_to_full_minutes
 
 _TIRE_UNIT_MAP = {
     TirePressureUnit.BAR: UnitOfPressure.BAR,
@@ -53,71 +53,45 @@ def _enum_name(value: Any) -> str | None:
     return name.lower() if isinstance(name, str) else str(value)
 
 
-def _rt(snapshot: VehicleSnapshot, attr: str) -> Any:
-    return getattr(snapshot.realtime, attr, None) if snapshot.realtime else None
-
-
 def _charging_state(snapshot: VehicleSnapshot) -> str | None:
-    """Charging state name for the enum sensor.
-
-    ``realtime.charging_state`` is UNKNOWN for many models, so prefer
-    ``realtime.effective_charging_state`` (``charge_state``), then fall back
-    to the smart-charge homepage section (``snapshot.charging``).
-    """
-    rt = snapshot.realtime
-    if rt is not None and rt.effective_charging_state != ChargingState.UNKNOWN:
-        return _enum_name(rt.effective_charging_state)
-    charging = snapshot.charging
-    if charging is not None and charging.charging_state is not None:
-        return "charging" if charging.is_charging else "not_charging"
-    return None
+    """Charging state for the enum sensor; always agrees with the binary sensor."""
+    charging = is_charging(snapshot)
+    if charging is None:
+        return None
+    return "charging" if charging else "not_charging"
 
 
 def _connect_state(snapshot: VehicleSnapshot) -> str | None:
-    """Charge-cable connection name for the enum sensor.
-
-    Sourced from the smart-charge homepage (``connectState``); the realtime
-    ``connect_state`` field is the T-Box link, not the charge cable.
-    """
-    charging = snapshot.charging
-    if charging is None or charging.connect_state is None:
+    """Charge-cable connection name for the enum sensor."""
+    plugged_in = is_plugged_in(snapshot)
+    if plugged_in is None:
         return None
-    return "connected" if charging.is_connected else "disconnected"
+    return "connected" if plugged_in else "disconnected"
 
 
-def _time_to_full(snapshot: VehicleSnapshot) -> int | None:
-    """Minutes to full charge, preferring the smart-charge homepage section.
+def _tire_unit(snapshot: VehicleSnapshot) -> str:
+    # BYD reports kPa when the vehicle's own unit is unavailable.
+    return _TIRE_UNIT_MAP.get(rt(snapshot, "tire_press_unit"), UnitOfPressure.KPA)
 
-    Only the ``snapshot.charging`` section carries ``full_hour``/``full_minute``
-    for most models; the realtime section leaves them unset.
-    """
-    charging = snapshot.charging
-    if charging is not None:
-        minutes = charging.time_to_full_minutes
-        if minutes is not None:
-            return minutes
-    rt = snapshot.realtime
-    return rt.time_to_full_minutes if rt is not None else None
+
+def _energy_section(snapshot: VehicleSnapshot, attr: str) -> Any:
+    """First non-empty ``attr`` from the cumulative, then nearest, energy section."""
+    energy = snapshot.energy
+    if energy is None:
+        return None
+    for section in (energy.cumulative_energy_consumption, energy.nearest_energy_consumption):
+        value = getattr(section, attr, None) if section is not None else None
+        if value is not None and value != "":
+            return value
+    return None
 
 
 def _energy_avg(snapshot: VehicleSnapshot) -> Any:
-    energy = snapshot.energy
-    if energy is None:
-        return None
-    for section in (energy.cumulative_energy_consumption, energy.nearest_energy_consumption):
-        if section is not None and section.avg_ev_consumption is not None:
-            return section.avg_ev_consumption
-    return None
+    return _energy_section(snapshot, "avg_ev_consumption")
 
 
 def _energy_unit(snapshot: VehicleSnapshot) -> str | None:
-    energy = snapshot.energy
-    if energy is None:
-        return None
-    for section in (energy.cumulative_energy_consumption, energy.nearest_energy_consumption):
-        if section is not None and section.ev_unit:
-            return section.ev_unit
-    return None
+    return _energy_section(snapshot, "ev_unit")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -128,6 +102,17 @@ class BydSensorDescription(SensorEntityDescription):
     unit_fn: Callable[[VehicleSnapshot], str | None] | None = None
 
 
+def _tire(key: str, attr: str) -> BydSensorDescription:
+    return BydSensorDescription(
+        key=key,
+        translation_key=key,
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda s: rt(s, attr),
+        unit_fn=_tire_unit,
+    )
+
+
 SENSORS: tuple[BydSensorDescription, ...] = (
     BydSensorDescription(
         key="battery",
@@ -135,7 +120,7 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "elec_percent"),
+        value_fn=lambda s: rt(s, "elec_percent"),
     ),
     BydSensorDescription(
         key="range",
@@ -143,7 +128,7 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "endurance_mileage"),
+        value_fn=lambda s: rt(s, "endurance_mileage"),
     ),
     BydSensorDescription(
         key="total_mileage",
@@ -151,7 +136,7 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfLength.KILOMETERS,
         device_class=SensorDeviceClass.DISTANCE,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda s: _rt(s, "total_mileage"),
+        value_fn=lambda s: rt(s, "total_mileage"),
     ),
     BydSensorDescription(
         key="speed",
@@ -159,7 +144,7 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfSpeed.KILOMETERS_PER_HOUR,
         device_class=SensorDeviceClass.SPEED,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "speed"),
+        value_fn=lambda s: rt(s, "speed"),
     ),
     BydSensorDescription(
         key="cabin_temperature",
@@ -167,19 +152,20 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "temp_in_car"),
+        value_fn=lambda s: rt(s, "temp_in_car"),
     ),
     BydSensorDescription(
         key="hvac_set_temperature",
         translation_key="hvac_set_temperature",
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
-        value_fn=lambda s: _rt(s, "main_setting_temp_new") or _rt(s, "main_setting_temp"),
+        value_fn=lambda s: rt(s, "main_setting_temp_new") or rt(s, "main_setting_temp"),
     ),
     BydSensorDescription(
         key="charging_state",
         translation_key="charging_state",
         device_class=SensorDeviceClass.ENUM,
+        # "unknown"/"connected" are kept so existing history stays translatable.
         options=["unknown", "not_charging", "charging", "connected"],
         value_fn=_charging_state,
     ),
@@ -195,54 +181,26 @@ SENSORS: tuple[BydSensorDescription, ...] = (
         translation_key="power_gear",
         device_class=SensorDeviceClass.ENUM,
         options=["unknown", "off", "on"],
-        value_fn=lambda s: _enum_name(_rt(s, "power_gear")),
+        value_fn=lambda s: _enum_name(rt(s, "power_gear")),
     ),
     BydSensorDescription(
         key="online_state",
         translation_key="online_state",
         device_class=SensorDeviceClass.ENUM,
         options=["unknown", "online", "offline"],
-        value_fn=lambda s: _enum_name(_rt(s, "online_state")),
+        value_fn=lambda s: _enum_name(rt(s, "online_state")),
     ),
     BydSensorDescription(
         key="time_to_full",
         translation_key="time_to_full",
         native_unit_of_measurement=UnitOfTime.MINUTES,
         device_class=SensorDeviceClass.DURATION,
-        value_fn=_time_to_full,
+        value_fn=time_to_full_minutes,
     ),
-    BydSensorDescription(
-        key="tire_pressure_front_left",
-        translation_key="tire_pressure_front_left",
-        device_class=SensorDeviceClass.PRESSURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "left_front_tire_pressure"),
-        unit_fn=lambda s: _TIRE_UNIT_MAP.get(_rt(s, "tire_press_unit")),
-    ),
-    BydSensorDescription(
-        key="tire_pressure_front_right",
-        translation_key="tire_pressure_front_right",
-        device_class=SensorDeviceClass.PRESSURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "right_front_tire_pressure"),
-        unit_fn=lambda s: _TIRE_UNIT_MAP.get(_rt(s, "tire_press_unit")),
-    ),
-    BydSensorDescription(
-        key="tire_pressure_rear_left",
-        translation_key="tire_pressure_rear_left",
-        device_class=SensorDeviceClass.PRESSURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "left_rear_tire_pressure"),
-        unit_fn=lambda s: _TIRE_UNIT_MAP.get(_rt(s, "tire_press_unit")),
-    ),
-    BydSensorDescription(
-        key="tire_pressure_rear_right",
-        translation_key="tire_pressure_rear_right",
-        device_class=SensorDeviceClass.PRESSURE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda s: _rt(s, "right_rear_tire_pressure"),
-        unit_fn=lambda s: _TIRE_UNIT_MAP.get(_rt(s, "tire_press_unit")),
-    ),
+    _tire("tire_pressure_front_left", "left_front_tire_pressure"),
+    _tire("tire_pressure_front_right", "right_front_tire_pressure"),
+    _tire("tire_pressure_rear_left", "left_rear_tire_pressure"),
+    _tire("tire_pressure_rear_right", "right_rear_tire_pressure"),
     BydSensorDescription(
         key="gps_speed",
         translation_key="gps_speed",
@@ -264,16 +222,16 @@ SENSORS: tuple[BydSensorDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: BydConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up BYD sensors."""
-    coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[BydSensor] = []
-    for vin in coordinator.cars:
-        for description in SENSORS:
-            entities.append(BydSensor(coordinator, vin, description))
-    async_add_entities(entities)
+    coordinator = entry.runtime_data
+    async_add_entities(
+        BydSensor(coordinator, vin, description)
+        for vin in coordinator.cars
+        for description in SENSORS
+    )
 
 
 class BydSensor(BydBaseEntity, SensorEntity):
@@ -299,9 +257,10 @@ class BydSensor(BydBaseEntity, SensorEntity):
         )
         return _PRESSURE_OPT_MAP.get((choice or "").lower())
 
-    def _native_source_unit(self, snapshot: VehicleSnapshot) -> str | None:
+    def _source_unit(self) -> str | None:
         """Unit the vehicle reports this sensor in."""
-        if self.entity_description.unit_fn is not None:
+        snapshot = self.snapshot
+        if snapshot is not None and self.entity_description.unit_fn is not None:
             unit = self.entity_description.unit_fn(snapshot)
             if unit is not None:
                 return unit
@@ -314,24 +273,16 @@ class BydSensor(BydBaseEntity, SensorEntity):
             return None
         value = self.entity_description.value_fn(snapshot)
         target = self._pressure_target_unit()
-        if target is not None and value is not None:
-            # BYD reports kPa when the vehicle's own unit is unavailable.
-            source = self._native_source_unit(snapshot) or UnitOfPressure.KPA
-            if source != target:
-                try:
-                    return round(PressureConverter.convert(float(value), source, target), 1)
-                except (TypeError, ValueError):
-                    return value
-        return value
+        if target is None or value is None:
+            return value
+        source = self._source_unit() or UnitOfPressure.KPA
+        if source == target:
+            return value
+        try:
+            return round(PressureConverter.convert(float(value), source, target), 1)
+        except (TypeError, ValueError):
+            return value
 
     @property
     def native_unit_of_measurement(self) -> str | None:
-        target = self._pressure_target_unit()
-        if target is not None:
-            return target
-        snapshot = self.snapshot
-        if snapshot is not None and self.entity_description.unit_fn is not None:
-            unit = self.entity_description.unit_fn(snapshot)
-            if unit is not None:
-                return unit
-        return self.entity_description.native_unit_of_measurement
+        return self._pressure_target_unit() or self._source_unit()

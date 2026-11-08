@@ -7,26 +7,20 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pybyd import BydCar, SeatLevel, SeatPosition  # noqa: E402
-from pybyd._state_engine import VehicleSnapshot  # noqa: E402
-from pybyd.models.realtime import SeatHeatVentState  # noqa: E402
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from pybyd import BydCar, SeatLevel, SeatPosition
+from pybyd._state_engine import VehicleSnapshot
+from pybyd.models.realtime import SeatHeatVentState
 
-from . import _vendored  # noqa: F401
-from .const import DOMAIN
-from .coordinator import BydDataUpdateCoordinator
+from .coordinator import BydConfigEntry, BydDataUpdateCoordinator
 from .entity import BydBaseEntity
-
-
-def _rt(snapshot: VehicleSnapshot, attr: str) -> Any:
-    return getattr(snapshot.realtime, attr, None) if snapshot.realtime else None
+from .helpers import rt
 
 
 def _seat_on(attr: str) -> Callable[[VehicleSnapshot], bool | None]:
     def _fn(s: VehicleSnapshot) -> bool | None:
-        value = _rt(s, attr)
+        value = rt(s, attr)
         if value is None or value in (SeatHeatVentState.UNKNOWN, SeatHeatVentState.NO_DATA):
             return None
         return value in (SeatHeatVentState.LOW, SeatHeatVentState.HIGH)
@@ -106,11 +100,11 @@ SWITCHES: tuple[BydSwitchDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: BydConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up BYD switches."""
-    coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     entities: list[BydSwitch] = []
     for vin, car in coordinator.cars.items():
         for description in SWITCHES:

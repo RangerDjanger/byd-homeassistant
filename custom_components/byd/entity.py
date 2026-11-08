@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from pybyd import BydCar, BydError  # noqa: E402
-from pybyd._state_engine import VehicleSnapshot  # noqa: E402
+from pybyd import BydCar
+from pybyd._state_engine import VehicleSnapshot
 
 from .const import DOMAIN
 from .coordinator import BydDataUpdateCoordinator
@@ -23,7 +22,6 @@ class BydBaseEntity(CoordinatorEntity[BydDataUpdateCoordinator]):
     def __init__(self, coordinator: BydDataUpdateCoordinator, vin: str, key: str) -> None:
         super().__init__(coordinator)
         self._vin = vin
-        self._key = key
         self._attr_unique_id = f"{vin}_{key}"
 
         meta = coordinator.device_meta(vin)
@@ -52,14 +50,5 @@ class BydBaseEntity(CoordinatorEntity[BydDataUpdateCoordinator]):
         return self.coordinator.cars[self._vin]
 
     async def async_run_command(self, action: Callable[[], Awaitable[Any]]) -> None:
-        """Verify command access, execute an action, and reconcile state.
-
-        Wraps pybyd errors in :class:`HomeAssistantError` so failures surface
-        cleanly in the UI, then requests a coordinator refresh.
-        """
-        try:
-            await self.coordinator.async_verify_commands(self._vin)
-            await action()
-        except BydError as err:
-            raise HomeAssistantError(f"BYD command failed: {err}") from err
-        await self.coordinator.async_request_refresh()
+        """Run a remote command for this vehicle via the coordinator."""
+        await self.coordinator.async_run_command(self._vin, action)

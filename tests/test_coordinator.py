@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time as dt_time, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
+from datetime import time as dt_time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from pybyd import BydAuthenticationError, BydError, Vehicle
 from pybyd._state_engine import VehicleSnapshot
 from pybyd.models.charging import ChargingStatus
+from pybyd.models.realtime import ChargingState, VehicleRealtimeData
 import pytest
 
 from custom_components.byd import coordinator as coordinator_module
@@ -175,7 +178,7 @@ QUIET_OPTS = {
 
 def _freeze_now(monkeypatch: pytest.MonkeyPatch, at: dt_time) -> None:
     """Pin ``dt_util.now()`` (as seen by the coordinator) to a fixed time."""
-    fixed = datetime(2026, 7, 3, at.hour, at.minute, at.second, tzinfo=timezone.utc)
+    fixed = datetime(2026, 7, 3, at.hour, at.minute, at.second, tzinfo=UTC)
     monkeypatch.setattr(coordinator_module.dt_util, "now", lambda: fixed)
 
 
@@ -294,3 +297,71 @@ def test_scan_interval_default_when_unset(hass: HomeAssistant) -> None:
     """With no options, the coordinator uses the default scan interval."""
     coordinator = BydDataUpdateCoordinator(hass, _entry(hass))
     assert coordinator._scan_interval == DEFAULT_SCAN_INTERVAL
+
+
+async def test_setup_failure_closes_client_and_raises_update_failed(
+    hass: HomeAssistant,
+) -> None:
+    """A BYD outage during setup becomes UpdateFailed (-> setup retry), not a leak."""
+    coordinator = BydDataUpdateCoordinator(hass, _entry(hass))
+    client = AsyncMock()
+    client.login = AsyncMock(side_effect=BydError("cloud down"))
+    with (
+        patch.object(coordinator_module, "BydClient", return_value=client),
+        pytest.raises(UpdateFailed),
+    ):
+        await coordinator._async_setup()
+    client.async_close.assert_awaited_once()
+    assert coordinator.client is None
+
+
+async def test_setup_auth_failure_raises_reauth(hass: HomeAssistant) -> None:
+    """Bad credentials during setup start a reauth instead of retrying."""
+    coordinator = BydDataUpdateCoordinator(hass, _entry(hass))
+    client = AsyncMock()
+    client.login = AsyncMock(side_effect=BydAuthenticationError("bad creds"))
+    with (
+        patch.object(coordinator_module, "BydClient", return_value=client),
+        pytest.raises(ConfigEntryAuthFailed),
+    ):
+        await coordinator._async_setup()
+    client.async_close.assert_awaited_once()
+
+
+async def test_state_callbacks_are_batched_during_poll(hass: HomeAssistant) -> None:
+    """Per-section callbacks fired mid-poll do not each publish an update."""
+    coordinator = BydDataUpdateCoordinator(hass, _entry(hass))
+    car = _mock_car()
+    await _setup_coordinator(hass, coordinator, car)
+    published: list[dict] = []
+    coordinator.async_set_updated_data = published.append  # type: ignore[method-assign]
+
+    async def _section_update() -> None:
+        coordinator._handle_state_changed(VIN, car.state)
+
+    car.update_hvac = AsyncMock(side_effect=_section_update)
+    car.update_gps = AsyncMock(side_effect=_section_update)
+
+    data = await coordinator._async_update_data()
+
+    assert published == []
+    assert data[VIN] is car.state
+    # Outside a poll (e.g. MQTT push) the callback publishes immediately.
+    coordinator._handle_state_changed(VIN, car.state)
+    assert len(published) == 1
+
+
+def test_interval_charging_detected_from_realtime_fallback(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quiet-hours charging detection uses the same fallback as the entities."""
+    coordinator = BydDataUpdateCoordinator(hass, _entry(hass, options=QUIET_OPTS))
+    _freeze_now(monkeypatch, dt_time(2, 0))
+    snapshot = VehicleSnapshot(
+        vehicle=Vehicle(vin=VIN),
+        realtime=VehicleRealtimeData(charge_state=ChargingState.CHARGING),
+    )
+
+    interval = coordinator._compute_update_interval({VIN: snapshot})
+
+    assert interval == timedelta(seconds=300)

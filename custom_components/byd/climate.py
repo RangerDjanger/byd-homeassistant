@@ -9,14 +9,12 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pybyd.models.hvac import HvacOverallStatus  # noqa: E402
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from pybyd.models.hvac import HvacOverallStatus
 
-from .const import DOMAIN
-from .coordinator import BydDataUpdateCoordinator
+from .coordinator import BydConfigEntry, BydDataUpdateCoordinator
 from .entity import BydBaseEntity
 
 MIN_TEMP = 15.0
@@ -27,23 +25,23 @@ DEFAULT_DURATION = 20
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: BydConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up BYD climate entities."""
-    coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[BydClimate] = []
-    for vin, car in coordinator.cars.items():
-        if car.capabilities.climate:
-            entities.append(BydClimate(coordinator, vin))
-    async_add_entities(entities)
+    coordinator = entry.runtime_data
+    async_add_entities(
+        BydClimate(coordinator, vin)
+        for vin, car in coordinator.cars.items()
+        if car.capabilities.climate
+    )
 
 
 class BydClimate(BydBaseEntity, ClimateEntity):
     """Cabin pre-conditioning climate control for a BYD vehicle."""
 
     _attr_translation_key = "climate"
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT_COOL]
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
@@ -53,14 +51,14 @@ class BydClimate(BydBaseEntity, ClimateEntity):
         | ClimateEntityFeature.TURN_ON
         | ClimateEntityFeature.TURN_OFF
     )
-    _enable_turn_on_off_backwards_compatibility = False
 
     def __init__(self, coordinator: BydDataUpdateCoordinator, vin: str) -> None:
         super().__init__(coordinator, vin, "climate")
-        self._target_temp: float = DEFAULT_TARGET_TEMP
+        # Setpoint chosen in HA while climate is off; used on the next start.
+        self._pending_target: float | None = None
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         snapshot = self.snapshot
         if snapshot is None:
             return None
@@ -68,45 +66,45 @@ class BydClimate(BydBaseEntity, ClimateEntity):
             return snapshot.hvac.temp_in_car
         return getattr(snapshot.realtime, "temp_in_car", None) if snapshot.realtime else None
 
-    @property
-    def target_temperature(self) -> float | None:
+    def _vehicle_target(self) -> float | None:
+        """Setpoint the vehicle reports (hvac section first, then realtime)."""
         snapshot = self.snapshot
-        if snapshot is not None:
-            hvac = snapshot.hvac
-            if hvac is not None:
-                temp = hvac.main_setting_temp_new or hvac.main_setting_temp
+        if snapshot is None:
+            return None
+        for section in (snapshot.hvac, snapshot.realtime):
+            if section is not None:
+                temp = section.main_setting_temp_new or section.main_setting_temp
                 if temp is not None:
                     return temp
-            rt = snapshot.realtime
-            if rt is not None:
-                temp = rt.main_setting_temp_new or rt.main_setting_temp
-                if temp is not None:
-                    return temp
-        return self._target_temp
+        return None
+
+    @property
+    def native_target_temperature(self) -> float | None:
+        if self._pending_target is not None and self.hvac_mode == HVACMode.OFF:
+            return self._pending_target
+        return self._vehicle_target() or self._pending_target or DEFAULT_TARGET_TEMP
 
     @property
     def hvac_mode(self) -> HVACMode:
         snapshot = self.snapshot
-        if snapshot is not None and snapshot.hvac is not None:
-            if snapshot.hvac.status == HvacOverallStatus.ON:
-                return HVACMode.HEAT_COOL
-            if snapshot.hvac.status == HvacOverallStatus.OFF:
-                return HVACMode.OFF
+        if (
+            snapshot is not None
+            and snapshot.hvac is not None
+            and snapshot.hvac.status == HvacOverallStatus.ON
+        ):
+            return HVACMode.HEAT_COOL
         return HVACMode.OFF
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
-        self._target_temp = float(temperature)
-        # Only push to the vehicle if climate is currently running.
+        target = float(temperature)
         if self.hvac_mode == HVACMode.HEAT_COOL:
-            await self.async_run_command(
-                lambda: self.car.hvac.start(
-                    temperature=self._target_temp, duration=DEFAULT_DURATION
-                )
-            )
+            # Climate is running: push the new setpoint to the vehicle now.
+            await self._async_start(target)
         else:
+            self._pending_target = target
             self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -116,11 +114,13 @@ class BydClimate(BydBaseEntity, ClimateEntity):
             await self.async_turn_on()
 
     async def async_turn_on(self) -> None:
-        await self.async_run_command(
-            lambda: self.car.hvac.start(
-                temperature=self._target_temp, duration=DEFAULT_DURATION
-            )
-        )
+        await self._async_start(self.native_target_temperature or DEFAULT_TARGET_TEMP)
 
     async def async_turn_off(self) -> None:
         await self.async_run_command(self.car.hvac.stop)
+
+    async def _async_start(self, temperature: float) -> None:
+        await self.async_run_command(
+            lambda: self.car.hvac.start(temperature=temperature, duration=DEFAULT_DURATION)
+        )
+        self._pending_target = None

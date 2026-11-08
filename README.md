@@ -32,12 +32,18 @@ Entities are created only for the capabilities your vehicle reports.
 
 ## Installation
 
-### HACS (recommended)
+Requires **Home Assistant 2026.11 or newer** (v0.2.0+). On older versions the
+Marketplace offers the last compatible release (v0.1.x).
 
-1. In HACS, go to **Integrations → ⋮ → Custom repositories**.
+### Marketplace (recommended)
+
+1. Go to **Settings → Marketplace → ⋮ → Custom repositories**.
 2. Add `https://github.com/RangerDjanger/byd-homeassistant` with category
    **Integration**.
 3. Search for **BYD Integration**, install it, and restart Home Assistant.
+
+The Marketplace installs the latest GitHub **release**, not the `main` branch,
+so a fix only reaches installs once it is tagged and released.
 
 ### Manual
 
@@ -61,7 +67,10 @@ After setup, open the integration options to adjust:
 
 - **Polling interval** — how often to poll the BYD cloud (fallback to realtime
   updates). Default 60 seconds, minimum 30.
+- **Tyre pressure unit** — keep the vehicle's unit, or show kPa / psi / bar.
 - **Enable realtime (MQTT) updates** — when enabled, live pushes reduce polling.
+- **Quiet hours** — poll slowly overnight (default 22:00–07:00, every 30 min),
+  speeding up to the charging interval while the car is charging.
 
 ## Remote commands and the control PIN
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import time as dt_time
 from datetime import timedelta
 import logging
@@ -9,11 +10,11 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
-from pybyd import (  # noqa: E402  # import after vendored path setup
+from pybyd import (
     BydAuthenticationError,
     BydCar,
     BydClient,
@@ -21,7 +22,7 @@ from pybyd import (  # noqa: E402  # import after vendored path setup
     BydError,
     Vehicle,
 )
-from pybyd._state_engine import VehicleSnapshot  # noqa: E402
+from pybyd._state_engine import VehicleSnapshot
 
 from .const import (
     CONF_BASE_URL,
@@ -48,24 +49,24 @@ from .const import (
     DOMAIN,
     MANUFACTURER,
 )
+from .helpers import is_charging
 
 _LOGGER = logging.getLogger(__name__)
+
+type BydConfigEntry = ConfigEntry[BydDataUpdateCoordinator]
 
 
 class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]):
     """Coordinate polling + MQTT push updates for a BYD account."""
 
-    config_entry: ConfigEntry
+    config_entry: BydConfigEntry
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self.config_entry = entry
-
-        self._scan_interval = int(
-            entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-        )
+    def __init__(self, hass: HomeAssistant, entry: BydConfigEntry) -> None:
+        self._scan_interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=DOMAIN,
             update_interval=timedelta(seconds=self._scan_interval),
         )
@@ -75,6 +76,9 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
         self.vehicles: dict[str, Vehicle] = {}
         self._commands_verified: set[str] = set()
         self._has_pin = bool(entry.data.get(CONF_CONTROL_PIN))
+        # While a poll is running, per-section state callbacks are suppressed;
+        # the poll publishes one combined update when it finishes.
+        self._polling = False
 
     # ------------------------------------------------------------------
     # Setup / teardown
@@ -82,46 +86,56 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
 
     def _build_config(self) -> BydConfig:
         entry = self.config_entry
-        enable_mqtt = bool(entry.options.get(CONF_ENABLE_MQTT, DEFAULT_ENABLE_MQTT))
         return BydConfig(
             username=entry.data[CONF_USERNAME],
             password=entry.data[CONF_PASSWORD],
             control_pin=entry.data.get(CONF_CONTROL_PIN),
             country_code=entry.data.get(CONF_COUNTRY_CODE) or DEFAULT_COUNTRY_CODE,
             base_url=entry.data.get(CONF_BASE_URL) or DEFAULT_BASE_URL,
-            mqtt_enabled=enable_mqtt,
+            mqtt_enabled=bool(entry.options.get(CONF_ENABLE_MQTT, DEFAULT_ENABLE_MQTT)),
         )
 
-    async def async_setup(self) -> None:
-        """Authenticate, discover vehicles, and build per-VIN cars."""
-        session = async_get_clientsession(self.hass)
-        client = BydClient(self._build_config(), session=session)
+    async def _async_setup(self) -> None:
+        """Authenticate, discover vehicles, and build per-VIN cars.
+
+        Runs once, inside ``async_config_entry_first_refresh``, so a transient
+        failure here becomes ``ConfigEntryNotReady`` (HA retries the setup)
+        rather than a permanent setup error.
+        """
+        client = BydClient(self._build_config(), session=async_get_clientsession(self.hass))
         try:
             await client.async_start()
             await client.login()
             vehicles = await client.get_vehicles()
+            for vehicle in vehicles:
+                vin = vehicle.vin
+                if not vin:
+                    continue
+                self.vehicles[vin] = vehicle
+                self.cars[vin] = await client.get_car(
+                    vin,
+                    vehicle=vehicle,
+                    on_state_changed=self._handle_state_changed,
+                )
         except BydAuthenticationError as err:
-            await client.async_close()
+            await self._async_abort_setup(client)
             raise ConfigEntryAuthFailed(str(err)) from err
         except BydError as err:
-            await client.async_close()
+            await self._async_abort_setup(client)
             raise UpdateFailed(f"Failed to connect to BYD: {err}") from err
-
         self.client = client
-        for vehicle in vehicles:
-            vin = vehicle.vin
-            if not vin:
-                continue
-            self.vehicles[vin] = vehicle
-            car = await client.get_car(
-                vin,
-                vehicle=vehicle,
-                on_state_changed=self._handle_state_changed,
-            )
-            self.cars[vin] = car
+
+    async def _async_abort_setup(self, client: BydClient) -> None:
+        self.cars.clear()
+        self.vehicles.clear()
+        await client.async_close()
 
     async def async_shutdown(self) -> None:
-        """Close the client and release resources."""
+        """Close the client and release resources.
+
+        Registered automatically on entry unload because the coordinator is
+        constructed with ``config_entry``.
+        """
         await super().async_shutdown()
         if self.client is not None:
             await self.client.async_close()
@@ -132,28 +146,36 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
     # ------------------------------------------------------------------
 
     async def _async_update_data(self) -> dict[str, VehicleSnapshot]:
-        if self.client is None:
-            await self.async_setup()
-
         snapshots: dict[str, VehicleSnapshot] = {}
-        for vin, car in self.cars.items():
-            try:
-                await self._poll_car(car)
-            except BydAuthenticationError as err:
-                raise ConfigEntryAuthFailed(str(err)) from err
-            except BydError as err:
-                _LOGGER.debug("Polling failed for %s: %s", vin, err)
-            snapshots[vin] = car.state
+        self._polling = True
+        try:
+            for vin, car in self.cars.items():
+                try:
+                    await self._poll_car(car)
+                except BydAuthenticationError as err:
+                    raise ConfigEntryAuthFailed(str(err)) from err
+                except BydError as err:
+                    _LOGGER.debug("Polling failed for %s: %s", vin, err)
+                snapshots[vin] = car.state
+        finally:
+            self._polling = False
         self._apply_dynamic_interval(snapshots)
         return snapshots
+
+    async def _poll_car(self, car: BydCar) -> None:
+        """Refresh all data sections for one vehicle, tolerating per-section gaps."""
+        await car.update_realtime()
+        for fetch in (car.update_hvac, car.update_gps, car.update_charging, car.update_energy):
+            try:
+                await fetch()
+            except BydError as err:  # pragma: no cover - section may be unsupported
+                _LOGGER.debug("Section refresh failed for %s: %s", car.vin, err)
 
     # ------------------------------------------------------------------
     # Quiet hours / dynamic polling interval
     # ------------------------------------------------------------------
 
-    def _apply_dynamic_interval(
-        self, snapshots: dict[str, VehicleSnapshot]
-    ) -> None:
+    def _apply_dynamic_interval(self, snapshots: dict[str, VehicleSnapshot]) -> None:
         """Re-evaluate the polling interval after each cycle.
 
         HA reschedules the next refresh from ``self.update_interval`` once a
@@ -164,15 +186,11 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
             _LOGGER.debug(
                 "BYD polling interval -> %ss (was %ss)",
                 int(interval.total_seconds()),
-                int(self.update_interval.total_seconds())
-                if self.update_interval
-                else None,
+                int(self.update_interval.total_seconds()) if self.update_interval else None,
             )
             self.update_interval = interval
 
-    def _compute_update_interval(
-        self, snapshots: dict[str, VehicleSnapshot]
-    ) -> timedelta:
+    def _compute_update_interval(self, snapshots: dict[str, VehicleSnapshot]) -> timedelta:
         """Choose the polling interval for the upcoming cycle.
 
         Outside quiet hours the normal scan interval always applies. Inside the
@@ -194,34 +212,14 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
         if not _in_window(dt_util.now().time(), start, end):
             return fast
 
-        if self._any_car_charging(snapshots):
+        if any(is_charging(snapshot) for snapshot in snapshots.values()):
             charging = int(
-                options.get(
-                    CONF_CHARGING_SCAN_INTERVAL, DEFAULT_CHARGING_SCAN_INTERVAL
-                )
+                options.get(CONF_CHARGING_SCAN_INTERVAL, DEFAULT_CHARGING_SCAN_INTERVAL)
             )
             return timedelta(seconds=charging)
 
         quiet = int(options.get(CONF_QUIET_SCAN_INTERVAL, DEFAULT_QUIET_SCAN_INTERVAL))
         return timedelta(seconds=quiet)
-
-    @staticmethod
-    def _any_car_charging(snapshots: dict[str, VehicleSnapshot]) -> bool:
-        """Whether any vehicle reports it is actively charging."""
-        for snapshot in snapshots.values():
-            charging = getattr(snapshot, "charging", None)
-            if charging is not None and charging.is_charging:
-                return True
-        return False
-
-    async def _poll_car(self, car: BydCar) -> None:
-        """Refresh all data sections for one vehicle, tolerating per-section gaps."""
-        await car.update_realtime()
-        for fetch in (car.update_hvac, car.update_gps, car.update_charging, car.update_energy):
-            try:
-                await fetch()
-            except BydError as err:  # pragma: no cover - section may be unsupported
-                _LOGGER.debug("Section refresh failed for %s: %s", car.vin, err)
 
     # ------------------------------------------------------------------
     # MQTT push
@@ -229,7 +227,11 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
 
     @callback
     def _handle_state_changed(self, vin: str, snapshot: VehicleSnapshot) -> None:
-        """Handle an accepted state mutation (poll result or MQTT push)."""
+        """Handle an accepted state mutation (poll result, command or MQTT push)."""
+        if self._polling:
+            # The running poll reads ``car.state`` when it finishes, which
+            # already includes this mutation.
+            return
         data = dict(self.data or {})
         data[vin] = snapshot
         self.async_set_updated_data(data)
@@ -246,6 +248,19 @@ class BydDataUpdateCoordinator(DataUpdateCoordinator[dict[str, VehicleSnapshot]]
             return
         await self.client.verify_command_access(vin)
         self._commands_verified.add(vin)
+
+    async def async_run_command(self, vin: str, action: Callable[[], Awaitable[Any]]) -> None:
+        """Verify command access, execute a pybyd action, then refresh.
+
+        pybyd errors are re-raised as :class:`HomeAssistantError` so they
+        surface cleanly in the UI.
+        """
+        try:
+            await self.async_verify_commands(vin)
+            await action()
+        except BydError as err:
+            raise HomeAssistantError(f"BYD command failed: {err}") from err
+        await self.async_request_refresh()
 
     def get_snapshot(self, vin: str) -> VehicleSnapshot | None:
         """Return the latest snapshot for a VIN."""

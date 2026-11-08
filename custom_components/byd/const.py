@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from homeassistant.const import Platform
 
 DOMAIN = "byd"
@@ -27,7 +25,6 @@ CONF_CHARGING_SCAN_INTERVAL = "charging_scan_interval"
 
 # Defaults
 DEFAULT_SCAN_INTERVAL = 60
-MIN_SCAN_INTERVAL = 30
 DEFAULT_ENABLE_MQTT = True
 # "default" keeps the unit the vehicle reports; otherwise "kPa" / "psi" / "bar".
 DEFAULT_PRESSURE_UNIT = "default"
@@ -196,7 +193,6 @@ def base_url_for_country(country_code: str | None) -> str:
             return url
     return DEFAULT_BASE_URL
 
-SCAN_INTERVAL = timedelta(seconds=DEFAULT_SCAN_INTERVAL)
 
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,

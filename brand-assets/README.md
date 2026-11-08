@@ -1,9 +1,10 @@
 # BYD-HA brand assets
 
-Original artwork for the BYD Home Assistant integration. **Not loaded by the
-component** — Home Assistant serves integration logos from the
-[`home-assistant/brands`](https://github.com/home-assistant/brands) repository,
-keyed by domain. Nothing in `manifest.json` references these files.
+Original artwork for the BYD Home Assistant integration. The rendered PNGs are
+also shipped inside the integration at `custom_components/byd/brand/`, which
+Home Assistant (2026.x) and the Marketplace read directly, so no
+[`home-assistant/brands`](https://github.com/home-assistant/brands) PR is
+needed. Re-copy them there after running `render_brand.py`.
 
 ## Contents
 

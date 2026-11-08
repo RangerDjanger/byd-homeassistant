@@ -21,7 +21,6 @@ from custom_components.byd.const import (
     CONF_USERNAME,
     DEFAULT_BASE_URL,
     DEFAULT_COUNTRY_CODE,
-    DEFAULT_PRESSURE_UNIT,
     DOMAIN,
 )
 
@@ -181,8 +180,10 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"] == {
+    # Unchanged options are filled in from their defaults.
+    assert result["data"].items() >= {
         CONF_SCAN_INTERVAL: "120",
         CONF_PRESSURE_UNIT: "psi",
         CONF_ENABLE_MQTT: False,
-    }
+    }.items()
+    assert entry.options[CONF_SCAN_INTERVAL] == "120"

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 import os
 import sys
-from collections.abc import Generator
 
 import pytest
 
@@ -26,6 +26,6 @@ if _VENDOR_DIR not in sys.path:
 def auto_enable_custom_integrations(
     enable_custom_integrations: None,
     socket_enabled: None,
-) -> Generator[None, None, None]:
+) -> Generator[None]:
     """Enable custom integration loading and sockets for all tests."""
     yield

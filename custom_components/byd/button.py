@@ -7,13 +7,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from pybyd import BydCar  # noqa: E402
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from pybyd import BydCar
 
-from .const import DOMAIN
-from .coordinator import BydDataUpdateCoordinator
+from .coordinator import BydConfigEntry, BydDataUpdateCoordinator
 from .entity import BydBaseEntity
 
 
@@ -73,11 +71,11 @@ BUTTONS: tuple[BydButtonDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
+    entry: BydConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """Set up BYD buttons."""
-    coordinator: BydDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     entities: list[ButtonEntity] = []
     for vin, car in coordinator.cars.items():
         # A manual refresh/sync button is always offered; it needs no control

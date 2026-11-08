@@ -9,12 +9,12 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from pybyd import BydAuthenticationError, BydClient, BydConfig, BydError  # noqa: E402
+from pybyd import BydAuthenticationError, BydClient, BydConfig, BydError
 import voluptuous as vol
 
 from .const import (
@@ -95,7 +95,12 @@ PRESSURE_UNIT_OPTIONS = [
 ]
 
 
-async def _validate_login(hass, data: dict[str, Any]) -> None:
+_PASSWORD_SELECTOR = selector.TextSelector(
+    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+)
+
+
+async def _validate_login(hass: HomeAssistant, data: dict[str, Any]) -> None:
     """Validate credentials by performing a login. Raises on failure."""
     config = BydConfig(
         username=data[CONF_USERNAME],
@@ -182,8 +187,8 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_PASSWORD): str,
-                    vol.Optional(CONF_CONTROL_PIN): str,
+                    vol.Required(CONF_PASSWORD): _PASSWORD_SELECTOR,
+                    vol.Optional(CONF_CONTROL_PIN): _PASSWORD_SELECTOR,
                 }
             ),
             errors=errors,
@@ -209,8 +214,12 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
         return vol.Schema(
             {
                 vol.Required(CONF_USERNAME, default=data.get(CONF_USERNAME, "")): str,
-                vol.Required(CONF_PASSWORD, default=data.get(CONF_PASSWORD, "")): str,
-                vol.Optional(CONF_CONTROL_PIN, default=data.get(CONF_CONTROL_PIN, "")): str,
+                vol.Required(
+                    CONF_PASSWORD, default=data.get(CONF_PASSWORD, "")
+                ): _PASSWORD_SELECTOR,
+                vol.Optional(
+                    CONF_CONTROL_PIN, default=data.get(CONF_CONTROL_PIN, "")
+                ): _PASSWORD_SELECTOR,
                 vol.Required(
                     CONF_COUNTRY_CODE,
                     default=data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
@@ -232,8 +241,8 @@ class BydConfigFlow(ConfigFlow, domain=DOMAIN):
         return BydOptionsFlow()
 
 
-class BydOptionsFlow(OptionsFlow):
-    """Handle BYD integration options."""
+class BydOptionsFlow(OptionsFlowWithReload):
+    """Handle BYD integration options; the entry reloads when they change."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

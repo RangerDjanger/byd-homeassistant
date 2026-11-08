@@ -1,5 +1,5 @@
 # Ruff configuration for the BYD Home Assistant integration.
-target-version = "py312"
+target-version = "py314"
 line-length = 100
 
 extend-exclude = ["custom_components/byd/_vendor"]
